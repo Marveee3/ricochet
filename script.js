@@ -287,6 +287,48 @@ ctx.imageSmoothingEnabled = false;
 
 const W = 160, H = 144;
 
+// ---- background starfield (fills the letterbox bars around the game) ----
+const bgCv = document.getElementById('bg');
+const bgCtx = bgCv.getContext('2d');
+let bgW = 1, bgH = 1;
+let bgStars = [];
+const BG_DENSITY = 0.012;
+
+function bgResize() {
+  const scale = Math.min(innerWidth, innerHeight * 160 / 144) / 160;
+  bgW = Math.max(1, Math.ceil(innerWidth / scale));
+  bgH = Math.max(1, Math.ceil(innerHeight / scale));
+  bgCv.width = bgW;
+  bgCv.height = bgH;
+  bgStars.length = 0;
+  const n = Math.round(bgW * bgH * BG_DENSITY);
+  for (let i = 0; i < n; i++) {
+    bgStars.push({
+      x: Math.random() * bgW | 0,
+      y: Math.random() * bgH | 0,
+      base: Math.random() < 0.3 ? 0.8 : Math.random() < 0.5 ? 0.55 : 0.35,
+      ph: Math.random() * Math.PI * 2,
+      sp: 0.5 + Math.random() * 1.5,
+    });
+  }
+  drawBgStars(performance.now() / 1000);
+}
+
+function drawBgStars(now) {
+  bgCtx.fillStyle = '#000';
+  bgCtx.fillRect(0, 0, bgW, bgH);
+  bgCtx.fillStyle = '#fff';
+  for (const s of bgStars) {
+    bgCtx.globalAlpha = s.base * (0.6 + 0.4 * Math.sin(now * s.sp + s.ph));
+    bgCtx.fillRect(s.x, s.y, 1, 1);
+  }
+  bgCtx.globalAlpha = 1;
+}
+
+bgResize();
+addEventListener('resize', bgResize);
+addEventListener('orientationchange', bgResize);
+
 // ---- palette (8-bit) ----
 const COL = {
   bg:       '#000',
@@ -311,6 +353,24 @@ const over = () => Math.max(0, tA() - 1);
 const CX = 80, CY = 72;
 const R_WALL = 60;
 const R_PLAYER = 45;
+
+// ---- starfield in the corners (outside the wall ring) ----
+const starField = [];
+for (let i = 0; i < 30; i++) {
+  let x, y;
+  let ok = false;
+  while (!ok) {
+    x = Math.random() * W | 0;
+    y = Math.random() * H | 0;
+    ok = Math.hypot(x - CX, y - CY) >= 63 && !(y < 20 && (x < 30 || x > 130));
+  }
+  starField.push({
+    x, y,
+    base: Math.random() < 0.3 ? 0.8 : Math.random() < 0.5 ? 0.55 : 0.35,
+    ph: Math.random() * Math.PI * 2,
+    sp: 0.5 + Math.random() * 1.5,
+  });
+}
 
 // ---- wall: verlet particles + springs ----
 const N = 408;
@@ -370,8 +430,39 @@ addEventListener('keydown', e => {
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
 
-// ---- virtual joystick (whole screen, relative) ----
+// ---- virtual joystick (whole screen: touch anywhere + mouse LMB) ----
 const joy = { active: false, ox: 0, oy: 0, dx: 0, dy: 0, id: -1 };
+let mouseJoy = false;
+
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+function toGame(clientX, clientY) {
+  const r = canvas.getBoundingClientRect();
+  return {
+    x: clamp((clientX - r.left) / r.width * W, 0, W),
+    y: clamp((clientY - r.top) / r.height * H, 0, H),
+  };
+}
+
+function toGameRaw(clientX, clientY) {
+  const r = canvas.getBoundingClientRect();
+  return {
+    x: (clientX - r.left) / r.width * W,
+    y: (clientY - r.top) / r.height * H,
+  };
+}
+
+function setJoyDelta(px, py) {
+  let dx = px - joy.ox, dy = py - joy.oy;
+  const d = Math.hypot(dx, dy);
+  if (d > 8) { dx = dx / d * 8; dy = dy / d * 8; }
+  joy.dx = dx / 8;
+  joy.dy = dy / 8;
+}
+
+function endJoy() {
+  joy.active = false; joy.dx = 0; joy.dy = 0; joy.id = -1; mouseJoy = false;
+}
 
 function findTouch(e, id) {
   for (let i = 0; i < e.touches.length; i++) if (e.touches[i].identifier === id) return e.touches[i];
@@ -379,46 +470,51 @@ function findTouch(e, id) {
   return null;
 }
 
-function touchPos(e) {
-  const t = e.touches[0] || e.changedTouches[0];
-  const r = canvas.getBoundingClientRect();
-  return {
-    x: (t.clientX - r.left) / r.width * W,
-    y: (t.clientY - r.top) / r.height * H,
-  };
-}
-
-canvas.addEventListener('touchstart', e => {
+addEventListener('touchstart', e => {
   e.preventDefault();
   const t = e.changedTouches[0];
   if (state === 'menu') { start(); return; }
   if (state === 'gameover') { reset(); return; }
   if (joy.active) return;
-  const p = touchPos(e);
+  const p = toGame(t.clientX, t.clientY);
   joy.active = true; joy.ox = p.x; joy.oy = p.y; joy.id = t.identifier;
   joy.dx = 0; joy.dy = 0;
 }, { passive: false });
 
-canvas.addEventListener('touchmove', e => {
+addEventListener('touchmove', e => {
   e.preventDefault();
-  if (!joy.active) return;
+  if (!joy.active || joy.id < 0) return;
   const t = findTouch(e, joy.id);
   if (!t) return;
-  const r = canvas.getBoundingClientRect();
-  const px = (t.clientX - r.left) / r.width * W;
-  const py = (t.clientY - r.top) / r.height * H;
-  let dx = px - joy.ox, dy = py - joy.oy;
-  const d = Math.hypot(dx, dy);
-  if (d > 8) { dx = dx / d * 8; dy = dy / d * 8; }
-  joy.dx = dx / 8;
-  joy.dy = dy / 8;
+  const p = toGameRaw(t.clientX, t.clientY);
+  setJoyDelta(p.x, p.y);
 }, { passive: false });
 
-function endTouch(e) {
-  if (findTouch(e, joy.id)) { joy.active = false; joy.dx = 0; joy.dy = 0; joy.id = -1; }
-}
-canvas.addEventListener('touchend', endTouch);
-canvas.addEventListener('touchcancel', endTouch);
+addEventListener('touchend', e => { if (joy.id >= 0 && findTouch(e, joy.id)) endJoy(); });
+addEventListener('touchcancel', e => { if (joy.id >= 0 && findTouch(e, joy.id)) endJoy(); });
+
+// ---- mouse joystick (PC): LMB hold to move, LMB click to start/restart ----
+addEventListener('mousedown', e => {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  if (state === 'menu') { start(); return; }
+  if (state === 'gameover') { reset(); return; }
+  if (joy.active) return;
+  const p = toGame(e.clientX, e.clientY);
+  joy.active = true; joy.ox = p.x; joy.oy = p.y; joy.dx = 0; joy.dy = 0;
+  mouseJoy = true;
+});
+
+addEventListener('mousemove', e => {
+  if (!joy.active || !mouseJoy) return;
+  const p = toGameRaw(e.clientX, e.clientY);
+  setJoyDelta(p.x, p.y);
+});
+
+addEventListener('mouseup', e => {
+  if (e.button !== 0 || !mouseJoy) return;
+  endJoy();
+});
 
 // ---- actions ----
 function autoShoot() {
@@ -973,9 +1069,19 @@ function bestBar(y, label) {
   softText(label, 80, y + 2, COL.bg, 'center');
 }
 
+function drawStars() {
+  ctx.fillStyle = '#fff';
+  for (const s of starField) {
+    ctx.globalAlpha = s.base * (0.6 + 0.4 * Math.sin(time * s.sp + s.ph));
+    ctx.fillRect(s.x, s.y, 1, 1);
+  }
+  ctx.globalAlpha = 1;
+}
+
 function draw() {
   ctx.fillStyle = COL.bg;
   ctx.fillRect(0, 0, W, H);
+  drawStars();
 
   for (let i = 0; i < N; i++) {
     const p = particles[i];
@@ -1072,7 +1178,7 @@ function draw() {
     ctx.stroke();
     ctx.fillStyle = COL.bullet;
     ctx.beginPath();
-    ctx.arc(joy.ox + joy.dx * 8, joy.oy + joy.dy * 8, 3, 0, Math.PI * 2);
+    ctx.arc(clamp(joy.ox + joy.dx * 8, 0, W), clamp(joy.oy + joy.dy * 8, 0, H), 3, 0, Math.PI * 2);
     ctx.fill();
     ctx.globalAlpha = 1;
   }
@@ -1087,6 +1193,7 @@ function frame(now) {
   const dtms = Math.min(now - last, 100);
   last = now;
   acc += dtms;
+  drawBgStars(now / 1000);
   let steps = 0;
   while (acc >= STEP && steps < 8) {
     const sdt = STEP / 1000;

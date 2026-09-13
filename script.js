@@ -361,6 +361,7 @@ const player = { x: CX, y: CY - 38, vx: 0, vy: 0 };
 
 // ---- input ----
 const keys = {};
+const TOUCH = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 addEventListener('keydown', e => {
   keys[e.code] = true;
   if (e.code === 'Space') e.preventDefault();
@@ -369,11 +370,17 @@ addEventListener('keydown', e => {
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
 
-// ---- virtual joystick ----
-const joy = { active: false, ox: 0, oy: 0, dx: 0, dy: 0 };
+// ---- virtual joystick (whole screen, relative) ----
+const joy = { active: false, ox: 0, oy: 0, dx: 0, dy: 0, id: -1 };
+
+function findTouch(e, id) {
+  for (let i = 0; i < e.touches.length; i++) if (e.touches[i].identifier === id) return e.touches[i];
+  for (let i = 0; i < e.changedTouches.length; i++) if (e.changedTouches[i].identifier === id) return e.changedTouches[i];
+  return null;
+}
 
 function touchPos(e) {
-  const t = e.changedTouches[0];
+  const t = e.touches[0] || e.changedTouches[0];
   const r = canvas.getBoundingClientRect();
   return {
     x: (t.clientX - r.left) / r.width * W,
@@ -383,25 +390,33 @@ function touchPos(e) {
 
 canvas.addEventListener('touchstart', e => {
   e.preventDefault();
+  const t = e.changedTouches[0];
+  if (state === 'menu') { start(); return; }
+  if (state === 'gameover') { reset(); return; }
+  if (joy.active) return;
   const p = touchPos(e);
-  if (p.x < W * 0.45 && p.y > H * 0.55) {
-    joy.active = true; joy.ox = p.x; joy.oy = p.y;
-  } else if (state === 'menu') start();
-  else if (state === 'gameover') reset();
+  joy.active = true; joy.ox = p.x; joy.oy = p.y; joy.id = t.identifier;
+  joy.dx = 0; joy.dy = 0;
 }, { passive: false });
 
 canvas.addEventListener('touchmove', e => {
   e.preventDefault();
   if (!joy.active) return;
-  const p = touchPos(e);
-  let dx = p.x - joy.ox, dy = p.y - joy.oy;
+  const t = findTouch(e, joy.id);
+  if (!t) return;
+  const r = canvas.getBoundingClientRect();
+  const px = (t.clientX - r.left) / r.width * W;
+  const py = (t.clientY - r.top) / r.height * H;
+  let dx = px - joy.ox, dy = py - joy.oy;
   const d = Math.hypot(dx, dy);
-  if (d > 12) { dx = dx / d * 12; dy = dy / d * 12; }
-  joy.dx = dx / 12;
-  joy.dy = dy / 12;
+  if (d > 8) { dx = dx / d * 8; dy = dy / d * 8; }
+  joy.dx = dx / 8;
+  joy.dy = dy / 8;
 }, { passive: false });
 
-function endTouch() { joy.active = false; joy.dx = 0; joy.dy = 0; }
+function endTouch(e) {
+  if (findTouch(e, joy.id)) { joy.active = false; joy.dx = 0; joy.dy = 0; joy.id = -1; }
+}
 canvas.addEventListener('touchend', endTouch);
 canvas.addEventListener('touchcancel', endTouch);
 
@@ -1024,8 +1039,8 @@ function draw() {
     centerText('RICOCHET', 30, COL.wall);
     centerText('AUTO-GUN', 42, COL.bullet);
     hr(54);
-    centerText('WASD - MOVE', 64, COL.target);
-    centerText('PRESS SPACE / TAP', 74, COL.wall);
+    centerText(TOUCH ? 'DRAG - MOVE' : 'WASD - MOVE', 64, COL.target);
+    centerText(TOUCH ? 'TAP - START' : 'PRESS SPACE / TAP', 74, COL.wall);
     hr(86);
     bestBar(96, 'BEST ' + hiScore);
   } else if (state === 'gameover') {
@@ -1049,15 +1064,17 @@ function draw() {
   }
 
   if (joy.active) {
+    ctx.globalAlpha = 0.5;
     ctx.strokeStyle = COL.wall;
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.arc(joy.ox, joy.oy, 12, 0, Math.PI * 2);
+    ctx.arc(joy.ox, joy.oy, 8, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.fillStyle = COL.wall;
+    ctx.fillStyle = COL.bullet;
     ctx.beginPath();
-    ctx.arc(joy.ox + joy.dx * 12, joy.oy + joy.dy * 12, 4, 0, Math.PI * 2);
+    ctx.arc(joy.ox + joy.dx * 8, joy.oy + joy.dy * 8, 3, 0, Math.PI * 2);
     ctx.fill();
+    ctx.globalAlpha = 1;
   }
 }
 

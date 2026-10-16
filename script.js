@@ -491,6 +491,7 @@ function findTouch(e, id) {
 
 addEventListener('touchstart', e => {
   e.preventDefault();
+  canvas.focus();
   const t = e.changedTouches[0];
   if (state === 'menu') { start(); return; }
   if (state === 'gameover') { reset(); return; }
@@ -516,6 +517,7 @@ addEventListener('touchcancel', e => { if (joy.id >= 0 && findTouch(e, joy.id)) 
 addEventListener('mousedown', e => {
   if (e.button !== 0) return;
   e.preventDefault();
+  canvas.focus();
   if (state === 'menu') { start(); return; }
   if (state === 'gameover') { reset(); return; }
   if (joy.active) return;
@@ -595,8 +597,8 @@ function loseLife() {
   }
 }
 
-function start() { resetRun(); state = 'playing'; sfxStart(); startMusic(); }
-function reset() { start(); }
+function start() { resetRun(); state = 'playing'; sfxStart(); startMusic(); canvas.focus(); }
+function reset() { start(); canvas.focus(); }
 
 function resetRun() {
   score = 0; lives = 3; invuln = 0; autoFire = fireInterval(); time = 0;

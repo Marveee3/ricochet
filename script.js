@@ -341,6 +341,7 @@ const COL = {
   green:    '#3f3',
   purple:   '#c7f',
   blue:     '#5bf',
+  joker:    '#f8f',
 };
 
 // ---- balance helpers ----
@@ -397,6 +398,24 @@ const ebullets = [];
 const targets = [];
 const sparks = [];
 const popups = [];
+
+// ---- buff / debuff systems ----
+const MAX_LIVES = 5;
+const MAX_SHIELD = 3;
+const MAX_BULLETS = 40;
+const MAX_EBULLETS = 40;
+const MAX_MINES = 12;
+const MAX_PUPS = 2;
+const DROP_CHANCE = 0.12;
+const STREAK_FOR_BUFF = 3;
+const PUP = { HEAL: 0, SHIELD: 1, BURST: 2 };
+let shield = 0;
+let burstLevel = 0;
+let streak = 0;
+let growT = 0, fastT = 0, slowT = 0, gravT = 0, invertT = 0, glitchT = 0, spikeBreakT = 0;
+const mines = [];
+const powerups = [];
+let powerupTimer = 4;
 
 // ---- hi-score ----
 let hiScore = 0;
@@ -518,10 +537,16 @@ addEventListener('mouseup', e => {
 
 // ---- actions ----
 function autoShoot() {
-  if (bullets.length >= 20) return;
-  const dx = CX - player.x, dy = CY - player.y;
-  const d = Math.hypot(dx, dy) || 1;
-  const spd = 175 + 40 * tensionOf() + 25 * over() + 20 * Math.sin(Math.PI * 2 * time / 24);
+  if (bullets.length >= MAX_BULLETS) return;
+  let dx, dy, d;
+  if (glitchT > 0) {
+    const a = Math.random() * Math.PI * 2;
+    dx = Math.cos(a); dy = Math.sin(a); d = 1;
+  } else {
+    dx = CX - player.x; dy = CY - player.y;
+    d = Math.hypot(dx, dy) || 1;
+  }
+  const spd = (175 + 40 * tensionOf() + 25 * over() + 20 * Math.sin(Math.PI * 2 * time / 24)) * (fastT > 0 ? 1.35 : 1);
   bullets.push({
     x: player.x + dx / d * 4,
     y: player.y + dy / d * 4,
@@ -537,7 +562,7 @@ function autoShoot() {
 
 function fireInterval() {
   const ph = 0.5 + 0.5 * Math.sin(Math.PI * 2 * time / 24);
-  const base = lerp(3.0, 0.55, tensionOf()) * (1 + 0.15 * over()) * (1.35 - 0.7 * ph);
+  const base = lerp(3.0, 0.55, tensionOf()) * (1 + 0.15 * over()) * (1.35 - 0.7 * ph) * (fastT > 0 ? 0.75 : 1);
   const iv = Math.max(0.25, Math.min(5, base * (0.8 + Math.random() * 0.4)));
   musicFireLast = iv;
   return iv;
@@ -552,6 +577,13 @@ function spawnSparks(x, y, color) {
 }
 
 function loseLife() {
+  if (shield > 0) {
+    shield--;
+    invuln = 0.6;
+    spawnSparks(player.x, player.y, COL.blue);
+    sfxHurt();
+    return;
+  }
   lives--;
   invuln = 1.6;
   spawnSparks(player.x, player.y, COL.player);
@@ -569,12 +601,19 @@ function reset() { start(); }
 function resetRun() {
   score = 0; lives = 3; invuln = 0; autoFire = fireInterval(); time = 0;
   newBest = false;
+  shield = 0;
+  growT = 0; fastT = 0; slowT = 0; gravT = 0; invertT = 0; glitchT = 0; spikeBreakT = 0;
   rimTime = 0; spikeTimer = 0; spike.active = false; spike.up = false; spike.out = false;
   bullets.length = 0;
   ebullets.length = 0;
   sparks.length = 0;
   popups.length = 0;
   targets.length = 0;
+  mines.length = 0;
+  powerups.length = 0;
+  streak = 0;
+  burstLevel = 0;
+  powerupTimer = 4;
   player.vx = 0; player.vy = 0;
   player.x = CX; player.y = CY - 38;
   for (let i = 0; i < N; i++) {
@@ -585,9 +624,9 @@ function resetRun() {
 }
 
 // ---- targets ----
-const TYPE = { BASIC: 0, MINE: 1, RUNNER: 2, SHIELD: 3, TIMED: 4 };
-const TYPE_BONUS = [0, 60, 80, 120, 100];
-const TYPE_COL = [COL.target, COL.orange, COL.green, COL.purple, COL.blue];
+const TYPE = { BASIC: 0, MINE: 1, RUNNER: 2, SHIELD: 3, TIMED: 4, JOKER: 5 };
+const TYPE_BONUS = [0, 60, 80, 120, 100, 0];
+const TYPE_COL = [COL.target, COL.orange, COL.green, COL.purple, COL.blue, COL.joker];
 
 function makeTarget() {
   return {
@@ -611,10 +650,11 @@ function pickType() {
     return TYPE.RUNNER;
   }
   if (r < 0.5) return TYPE.BASIC;
-  if (r < 0.7) return TYPE.MINE;
-  if (r < 0.86) return TYPE.RUNNER;
-  if (r < 0.97) return TYPE.SHIELD;
-  return TYPE.TIMED;
+  if (r < 0.68) return TYPE.MINE;
+  if (r < 0.82) return TYPE.RUNNER;
+  if (r < 0.9) return TYPE.SHIELD;
+  if (r < 0.97) return TYPE.TIMED;
+  return TYPE.JOKER;
 }
 
 function pickSpot(t, minDist) {
@@ -650,7 +690,7 @@ function placeTarget(t) {
   const risk = Math.round((R_WALL - r) / R_WALL * 100);
   t.v0 = 100 + risk + TYPE_BONUS[t.type];
   t.value = t.v0;
-  t.win = t.type === TYPE.TIMED ? 5 : lerp(18, 9, tensionOf());
+  t.win = t.type === TYPE.TIMED ? 5 : t.type === TYPE.JOKER ? 14 : lerp(18, 9, tensionOf());
   t.life = t.win;
 }
 
@@ -714,11 +754,240 @@ function updateEbullets(dt) {
     e.life -= dt;
     if (e.life <= 0) { ebullets.splice(i, 1); continue; }
     if (Math.hypot(e.x - CX, e.y - CY) > R_WALL - 1) { ebullets.splice(i, 1); continue; }
-    if (e.age > 0.15 && invuln <= 0 && Math.hypot(e.x - player.x, e.y - player.y) < 7) {
+    if (e.age > 0.15 && invuln <= 0 && Math.hypot(e.x - player.x, e.y - player.y) < playerRad()) {
       ebullets.splice(i, 1);
       loseLife();
     }
   }
+}
+
+// ---- buff / debuff helpers ----
+function playerScal() { return growT > 0 ? 1.6 : 1; }
+function playerRad() { return 7 * playerScal(); }
+function addPop(x, y, text, color) {
+  popups.push({ x, y, text, life: 0.9, color: color || COL.targetHi });
+}
+function debuffPop(text) {
+  addPop(player.x, player.y - 10, text, COL.joker);
+  sfxDebuff();
+}
+function ringSparks(x, y, color) {
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    sparks.push({ x: x + Math.cos(a) * 6, y: y + Math.sin(a) * 6, vx: Math.cos(a) * 45, vy: Math.sin(a) * 45, life: 0.4, color });
+  }
+}
+function grantSpikeBreak() {
+  spikeBreakT = Math.min(7, spikeBreakT + 5);
+  rimTime = 0;
+  if (!spike.active) spikeTimer = Math.max(spikeTimer, 0.2);
+}
+
+// ---- radial burst ("explosion circle") ----
+function spawnBurst() {
+  burstLevel++;
+  const n = 8 + Math.min(6, burstLevel);
+  const spd = 175 + 40 * tensionOf();
+  const life = Math.min(14, 3.5 + 1.5 * burstLevel);
+  const maxB = Math.min(8, 2 + burstLevel);
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2;
+    bullets.push({
+      x: player.x + Math.cos(a) * 4,
+      y: player.y + Math.sin(a) * 4,
+      vx: Math.cos(a) * spd,
+      vy: Math.sin(a) * spd,
+      life, age: 0, bounces: 0, hit: false, maxB,
+    });
+  }
+  ringSparks(player.x, player.y, COL.target);
+  sfxBurst();
+}
+
+// ---- smart buff roll (never wastes on full caps) ----
+function rollBuffType() {
+  let wLife = 30, wShield = 25, wBurst = 45;
+  if (lives >= MAX_LIVES) wLife = 0;
+  if (shield >= MAX_SHIELD) wShield = 0;
+  const total = wLife + wShield + wBurst;
+  if (total <= 0) return PUP.BURST;
+  let r = Math.random() * total;
+  if ((r -= wLife) < 0) return PUP.HEAL;
+  if ((r -= wShield) < 0) return PUP.SHIELD;
+  return PUP.BURST;
+}
+function applyBuff(type) {
+  if (type === PUP.HEAL) {
+    lives = Math.min(MAX_LIVES, lives + 1);
+    addPop(player.x, player.y - 8, '+HP', COL.green);
+    sfxPower();
+  } else if (type === PUP.SHIELD) {
+    shield = Math.min(MAX_SHIELD, shield + 1);
+    addPop(player.x, player.y - 8, '+SHIELD', COL.blue);
+    sfxPower();
+  } else {
+    spawnBurst();
+    addPop(player.x, player.y - 8, 'BURST!', COL.target);
+  }
+  grantSpikeBreak();
+}
+function addKill(t) {
+  if (t.type === TYPE.JOKER) return;
+  streak++;
+  if (streak % STREAK_FOR_BUFF === 0) {
+    applyBuff(rollBuffType());
+    addPop(player.x, player.y - 10, 'STREAK ' + streak, COL.wall);
+  }
+}
+
+// ---- pickups ----
+function makePickup(type, x, y) {
+  powerups.push({ type, x, y, born: time, life: 7 });
+  if (powerups.length > MAX_PUPS) powerups.shift();
+}
+function pickTimedType() {
+  const r = Math.random();
+  return r < 0.4 ? PUP.HEAL : r < 0.75 ? PUP.SHIELD : PUP.BURST;
+}
+function spawnTimedPowerup() {
+  for (let tries = 0; tries < 30; tries++) {
+    const a = Math.random() * Math.PI * 2;
+    const r = 12 + Math.random() * 34;
+    const x = CX + Math.cos(a) * r;
+    const y = CY + Math.sin(a) * r;
+    if (Math.hypot(x - player.x, y - player.y) < 24) continue;
+    makePickup(pickTimedType(), x, y);
+    return;
+  }
+}
+function updatePowerups(dt) {
+  if (powerupTimer > 0) powerupTimer -= dt;
+  if (powerupTimer <= 0 && powerups.length < MAX_PUPS) {
+    spawnTimedPowerup();
+    powerupTimer = 6 + Math.random() * 4;
+  }
+  for (let i = powerups.length - 1; i >= 0; i--) {
+    const p = powerups[i];
+    p.life -= dt;
+    if (p.life <= 0) { powerups.splice(i, 1); continue; }
+    if (Math.hypot(p.x - player.x, p.y - player.y) < 9) {
+      collectPickup(p);
+      powerups.splice(i, 1);
+    }
+  }
+}
+function collectPickup(p) {
+  if (p.type === PUP.HEAL) {
+    lives = Math.min(MAX_LIVES, lives + 1);
+    addPop(p.x, p.y, '+HP', COL.green);
+  } else if (p.type === PUP.SHIELD) {
+    shield = Math.min(MAX_SHIELD, shield + 1);
+    addPop(p.x, p.y, '+SHIELD', COL.blue);
+  } else {
+    spawnBurst();
+    addPop(p.x, p.y, 'BURST!', COL.target);
+  }
+  grantSpikeBreak();
+  ringSparks(p.x, p.y, COL.green);
+  sfxPower();
+}
+function drawPowerups() {
+  for (const p of powerups) {
+    if (Math.floor(p.life * 2) % 2 === 0 && p.life < 2) continue;
+    const pulse = p.born;
+    if (p.type === PUP.HEAL) {
+      ctx.fillStyle = COL.green;
+      ctx.fillRect(Math.round(p.x) - 1, Math.round(p.y) - 3, 3, 7);
+      ctx.fillRect(Math.round(p.x) - 3, Math.round(p.y) - 1, 7, 3);
+    } else if (p.type === PUP.SHIELD) {
+      ctx.strokeStyle = COL.blue;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = COL.target;
+      const s = 2.4;
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * Math.PI * 2 + (pulse ? 0 : 0);
+        ctx.fillRect(Math.round(p.x + Math.cos(a) * s) - 1, Math.round(p.y + Math.sin(a) * s) - 1, 3, 3);
+      }
+    }
+  }
+}
+
+// ---- mines ----
+function spawnMines(n, ox, oy) {
+  for (let i = 0; i < n && mines.length < MAX_MINES; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const r = 8 + Math.random() * 10;
+    mines.push({ x: ox + Math.cos(a) * r, y: oy + Math.sin(a) * r, life: 6, age: 0 });
+  }
+  sfxDebuff();
+}
+function updateMines(dt) {
+  for (let i = mines.length - 1; i >= 0; i--) {
+    const m = mines[i];
+    m.life -= dt;
+    m.age += dt;
+    if (m.life <= 0) { mines.splice(i, 1); continue; }
+    if (invuln <= 0 && Math.hypot(m.x - player.x, m.y - player.y) < playerRad()) {
+      mines.splice(i, 1);
+      spawnSparks(m.x, m.y, COL.orange);
+      loseLife();
+    }
+  }
+}
+function drawMines() {
+  for (const m of mines) {
+    if (Math.floor(m.life * 2) % 2 === 0 && m.life < 2.5) continue;
+    ctx.fillStyle = COL.orange;
+    ctx.fillRect(Math.round(m.x) - 2, Math.round(m.y) - 2, 5, 5);
+  }
+}
+
+// ---- punishments ----
+function flashPunish(x, y) {
+  const n = 4;
+  for (let i = 0; i < n; i++) {
+    if (ebullets.length >= MAX_EBULLETS) break;
+    const a = (i / n) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
+    ebullets.push({ x: x + Math.cos(a) * 3, y: y + Math.sin(a) * 3, vx: Math.cos(a) * 120, vy: Math.sin(a) * 120, age: 0, life: 1.0 });
+  }
+  addPop(x, y - 6, 'FLASH', COL.orange);
+  sfxDebuff();
+}
+function spikeSprint() {
+  rimTime = CAMP_TIME;
+  spikeTimer = 0;
+}
+function rollPunishment(x, y) {
+  const r = Math.random() * 100;
+  if (r < 25) flashPunish(x, y);
+  else if (r < 37) { growT += 5; debuffPop('BIG'); }
+  else if (r < 46) { fastT += 5; debuffPop('FAST'); }
+  else if (r < 56) { slowT += 4; debuffPop('SLOW'); }
+  else if (r < 63) { gravT += 5; debuffPop('GRAV'); }
+  else if (r < 71) { spikeSprint(); debuffPop('SPIKES'); }
+  else if (r < 81) spawnMines(4, player.x, player.y);
+  else if (r < 88) { score = Math.max(0, score - 50); addPop(player.x, player.y - 10, '-50', COL.orange); sfxDebuff(); }
+  else if (r < 93) { glitchT += 5; debuffPop('GLITCH'); }
+  else { invertT += 3.5; debuffPop('INVERT'); }
+}
+
+function sfxPower() {
+  ensureAudio();
+  blip('square', 880, 1320, 0.09, 0.09);
+  blip('square', 1320, 1760, 0.12, 0.09, 0.08);
+}
+function sfxDebuff() {
+  ensureAudio();
+  blip('triangle', 320, 90, 0.25, 0.14);
+}
+function sfxBurst() {
+  ensureAudio();
+  noiseBurst(0.12, 0.14);
+  blip('square', 900, 1800, 0.22, 0.08);
 }
 
 // ---- updates ----
@@ -729,11 +998,18 @@ function updatePlayer(dt) {
   if (keys['KeyA'] || keys['ArrowLeft']) ax -= 1;
   if (keys['KeyD'] || keys['ArrowRight']) ax += 1;
   if (joy.active) { ax += joy.dx; ay += joy.dy; }
+  if (invertT > 0) { ax = -ax; ay = -ay; }
   const len = Math.hypot(ax, ay);
   if (len > 1) { ax /= len; ay /= len; }
-  const m = 1150;
+  const m = 1150 * (slowT > 0 ? 0.6 : 1);
   player.vx += ax * m * dt;
   player.vy += ay * m * dt;
+  if (gravT > 0) {
+    const gdx = CX - player.x, gdy = CY - player.y;
+    const gd = Math.hypot(gdx, gdy) || 1;
+    player.vx += gdx / gd * 90 * dt;
+    player.vy += gdy / gd * 90 * dt;
+  }
   player.vx *= 0.86;
   player.vy *= 0.86;
   player.x += player.vx * dt;
@@ -747,6 +1023,10 @@ function updatePlayer(dt) {
 }
 
 function updateSpikes(dt) {
+  if (spikeBreakT > 0) {
+    spikeBreakT -= dt;
+    if (!spike.active) { rimTime = 0; if (spikeTimer > 0) spikeTimer -= dt; return; }
+  }
   if (!spike.active) {
     if (spikeTimer > 0) spikeTimer -= dt;
     const dx = player.x - CX, dy = player.y - CY;
@@ -778,7 +1058,7 @@ function updateSpikes(dt) {
   spike.ang += Math.max(-maxTurn, Math.min(maxTurn, turn));
   const r = Math.hypot(player.x - CX, player.y - CY);
   const pd = Math.abs(Math.atan2(Math.sin(pa - spike.ang), Math.cos(pa - spike.ang)));
-  if (r >= SPIKE_TIP_R - 2 && pd < SPIKE_HALF && invuln <= 0) {
+  if (r >= SPIKE_TIP_R - 2 * playerScal() && pd < SPIKE_HALF && invuln <= 0) {
     loseLife();
   }
 }
@@ -830,12 +1110,23 @@ function updateBullets(dt) {
       b.bounces++;
       spawnSparks(b.x, b.y, COL.wall);
       sfxBounce();
-      const maxB = 6 + Math.round(4 * tensionOf());
+      const maxB = b.maxB || (6 + Math.round(4 * tensionOf()));
       if (b.bounces > maxB) dead = true;
     }
     if (!dead) {
       for (const t of targets) {
         if (t.alive && Math.hypot(b.x - t.x, b.y - t.y) < 6) {
+          if (t.type === TYPE.JOKER) {
+            t.hp--;
+            if (t.hp <= 0) {
+              t.alive = false;
+              t.respawn = time + respawnDelay();
+              spawnSparks(t.x, t.y, targetColor(t));
+              rollPunishment(t.x, t.y);
+            }
+            dead = true;
+            break;
+          }
           if (t.type === TYPE.MINE) explodeBomb(t);
           t.hp--;
           if (t.hp <= 0) {
@@ -845,6 +1136,10 @@ function updateBullets(dt) {
             popups.push({ x: t.x, y: t.y - 6, text: '+' + t.value, life: 0.8 });
             spawnSparks(t.x, t.y, targetColor(t));
             sfxHitTarget(t.type);
+            if (Math.random() < DROP_CHANCE && powerups.length < MAX_PUPS) {
+              makePickup(rollBuffType(), t.x, t.y);
+            }
+            addKill(t);
           } else {
             spawnSparks(t.x, t.y, targetColor(t));
             sfxDing();
@@ -857,7 +1152,7 @@ function updateBullets(dt) {
         }
       }
     }
-    if (!dead && invuln <= 0 && b.age > 0.3 && Math.hypot(b.x - player.x, b.y - player.y) < 7) {
+    if (!dead && invuln <= 0 && b.age > 0.3 && Math.hypot(b.x - player.x, b.y - player.y) < playerRad()) {
       dead = true;
       loseLife();
     }
@@ -1205,6 +1500,12 @@ function frame(now) {
         autoFire = fireInterval();
       }
       if (invuln > 0) invuln -= sdt;
+      if (growT > 0) growT -= sdt;
+      if (fastT > 0) fastT -= sdt;
+      if (slowT > 0) slowT -= sdt;
+      if (gravT > 0) gravT -= sdt;
+      if (invertT > 0) invertT -= sdt;
+      if (glitchT > 0) glitchT -= sdt;
       updatePlayer(sdt);
       updateSpikes(sdt);
       updateBullets(sdt);

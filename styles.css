@@ -18,3 +18,4 @@ body { display: flex; align-items: center; justify-content: center; }
   width: min(100vw, calc(100vh * 160 / 144));
   height: min(100vh, calc(100vw * 144 / 160));
 }
+#game:focus, #game:focus-visible { outline: none; }

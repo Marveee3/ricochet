@@ -406,6 +406,7 @@ const vfxAura   = (c,d) => { vfx.auraCol=c; vfx.auraDur=d; vfx.auraT=d; };
 // ---- buff / debuff systems ----
 const MAX_LIVES = 5;
 const MAX_SHIELD = 3;
+const MAX_BURST = 6;
 const MAX_BULLETS = 40;
 const MAX_EBULLETS = 40;
 const MAX_MINES = 12;
@@ -446,10 +447,12 @@ const player = { x: CX, y: CY - 38, vx: 0, vy: 0 };
 const keys = {};
 const TOUCH = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
 addEventListener('keydown', e => {
+  const wasDown = keys[e.code];
   keys[e.code] = true;
   if (e.code === 'Space') e.preventDefault();
-  if (e.code === 'KeyR' && state === 'gameover') reset();
-  if ((e.code === 'Space' || e.code === 'Enter') && state === 'menu') start();
+  if (state === 'menu') { start(); return; }
+  if (state === 'gameover') { if (!wasDown) reset(); return; }
+  if (e.code === 'Space' && state === 'playing' && !wasDown) releaseBurst();
 });
 addEventListener('keyup', e => { keys[e.code] = false; });
 
@@ -499,7 +502,7 @@ addEventListener('touchstart', e => {
   const t = e.changedTouches[0];
   if (state === 'menu') { start(); return; }
   if (state === 'gameover') { reset(); return; }
-  if (joy.active) return;
+  if (joy.active) { releaseBurst(); return; }
   const p = toGame(t.clientX, t.clientY);
   joy.active = true; joy.ox = p.x; joy.oy = p.y; joy.id = t.identifier;
   joy.dx = 0; joy.dy = 0;
@@ -519,16 +522,18 @@ addEventListener('touchcancel', e => { if (joy.id >= 0 && findTouch(e, joy.id)) 
 
 // ---- mouse joystick (PC): LMB hold to move, LMB click to start/restart ----
 addEventListener('mousedown', e => {
-  if (e.button !== 0) return;
   e.preventDefault();
   canvas.focus();
   if (state === 'menu') { start(); return; }
   if (state === 'gameover') { reset(); return; }
+  if (e.button !== 0) return;
   if (joy.active) return;
   const p = toGame(e.clientX, e.clientY);
   joy.active = true; joy.ox = p.x; joy.oy = p.y; joy.dx = 0; joy.dy = 0;
   mouseJoy = true;
 });
+
+addEventListener('contextmenu', e => e.preventDefault());
 
 addEventListener('mousemove', e => {
   if (!joy.active || !mouseJoy) return;
@@ -583,6 +588,7 @@ function spawnSparks(x, y, color) {
 }
 
 function loseLife() {
+  releaseBurst();
   vfxShake(3); vfxFlash(COL.player, 0.4, 4); vfxAura(COL.player, 0.7);
   if (shield > 0) {
     shield--;
@@ -804,22 +810,32 @@ function grantSpikeBreak() {
 
 // ---- radial burst ("explosion circle") ----
 function spawnBurst() {
-  burstLevel++;
-  const n = 8 + Math.min(6, burstLevel);
+  burstLevel = Math.min(MAX_BURST, burstLevel + 1);
+}
+
+function releaseBurst() {
+  if (burstLevel <= 0) return;
+  const n = burstLevel;
+  const orbitR = playerRad() + 6;
+  const spin = time * 2.5;
   const spd = 175 + 40 * tensionOf();
-  const life = Math.min(14, 3.5 + 1.5 * burstLevel);
-  const maxB = Math.min(8, 2 + burstLevel);
+  const life = Math.min(14, 3.5 + 1.5 * n);
+  const maxB = Math.min(8, 2 + n);
   for (let i = 0; i < n; i++) {
-    const a = (i / n) * Math.PI * 2;
+    const a = spin + (i / n) * Math.PI * 2;
     bullets.push({
-      x: player.x + Math.cos(a) * 4,
-      y: player.y + Math.sin(a) * 4,
+      x: player.x + Math.cos(a) * orbitR,
+      y: player.y + Math.sin(a) * orbitR,
       vx: Math.cos(a) * spd,
       vy: Math.sin(a) * spd,
       life, age: 0, bounces: 0, hit: false, maxB,
+      burst: true,
     });
   }
+  burstLevel = 0;
   ringSparks(player.x, player.y, COL.target);
+  vfxFlash(COL.target, 0.2, 3);
+  vfxShake(2);
   sfxBurst();
 }
 
@@ -828,6 +844,7 @@ function rollBuffType() {
   let wLife = 30, wShield = 25, wBurst = 45;
   if (lives >= MAX_LIVES) wLife = 0;
   if (shield >= MAX_SHIELD) wShield = 0;
+  if (burstLevel >= MAX_BURST) wBurst = 0;
   const total = wLife + wShield + wBurst;
   if (total <= 0) return PUP.BURST;
   let r = Math.random() * total;
@@ -848,8 +865,8 @@ function applyBuff(type) {
     sfxPower();
   } else {
     spawnBurst();
-    addPop(player.x, player.y - 8, 'BURST!', COL.target, 'buff');
-    vfxFlash(COL.target, 0.3, 2); vfxAura(COL.target, 0.7);
+    addPop(player.x, player.y - 8, '+BURST ' + burstLevel, COL.target, 'buff');
+    vfxAura(COL.target, 0.5);
   }
   grantSpikeBreak();
 }
@@ -1398,7 +1415,7 @@ function drawStars() {
 function drawEffectChips() {
   const chips = [];
   if (shield > 0)      chips.push(['SH'  + shield,     COL.blue]);
-  if (burstLevel > 0)  chips.push(['BR'  + burstLevel, COL.target]);
+
   if (spikeBreakT > 0) chips.push(['SPK', COL.green]);
   if (growT  > 0) chips.push(['BIG', COL.joker]);
   if (fastT  > 0) chips.push(['FST', COL.joker]);
@@ -1450,10 +1467,35 @@ function draw() {
     ctx.globalAlpha = (1 - k) * 0.4; drawRing(player.x, player.y, r + 2, vfx.auraCol);
     ctx.globalAlpha = 1;
   }
+  if (shield > 0) {
+    const pulse = 0.5 + 0.5 * Math.sin(time * 6);
+    const sr = playerRad() + 2 + pulse * 0.6;
+    ctx.globalAlpha = 0.9;
+    drawRing(player.x, player.y, sr, COL.blue);
+    ctx.globalAlpha = 0.35;
+    drawRing(player.x, player.y, sr + 1, COL.blue);
+    ctx.globalAlpha = 1;
+  }
+  if (burstLevel > 0) {
+    const orbitR = playerRad() + 6;
+    const n = burstLevel;
+    const spin = time * 2.5;
+    for (let i = 0; i < n; i++) {
+      const a = spin + (i / n) * Math.PI * 2;
+      const px = Math.round(player.x + Math.cos(a) * orbitR);
+      const py = Math.round(player.y + Math.sin(a) * orbitR);
+      ctx.globalAlpha = 0.4;
+      ctx.fillStyle = COL.target;
+      ctx.fillRect(px - 2, py - 2, 5, 5);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = COL.target;
+      ctx.fillRect(px - 1, py - 1, 3, 3);
+    }
+  }
   if (invuln <= 0 || Math.floor(time * 12) % 2 === 0) drawShip();
 
-  ctx.fillStyle = COL.bullet;
   for (const b of bullets) {
+    ctx.fillStyle = b.burst ? COL.target : COL.bullet;
     ctx.fillRect(Math.round(b.x) - 1, Math.round(b.y) - 1, 3, 3);
   }
   ctx.fillStyle = COL.orange;
@@ -1470,17 +1512,8 @@ function draw() {
     const a = Math.max(0, Math.min(1, p.life / 0.3));
     ctx.globalAlpha = a;
     ctx.font = '8px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-    const badge = p.kind === 'buff' || p.kind === 'debuff';
-    if (badge) {
-      const tw = Math.ceil(ctx.measureText(p.text).width);
-      const bx = Math.round(p.x - tw/2 - 2), by = Math.round(p.y - 1);
-      ctx.fillStyle = '#000'; ctx.fillRect(bx - 1, by - 1, tw + 4, 10);
-      ctx.fillStyle = p.color; ctx.fillRect(bx, by, tw + 2, 8);
-      ctx.fillStyle = '#000'; ctx.fillText(p.text, p.x, p.y);
-    } else {
-      ctx.fillStyle = '#000'; ctx.fillText(p.text, p.x + 1, p.y + 1);
-      ctx.fillStyle = p.color; ctx.fillText(p.text, p.x, p.y);
-    }
+    ctx.fillStyle = '#000'; ctx.fillText(p.text, p.x + 1, p.y + 1);
+    ctx.fillStyle = p.color; ctx.fillText(p.text, p.x, p.y);
     ctx.globalAlpha = 1;
   }
   ctx.textAlign = 'left';
@@ -1503,13 +1536,14 @@ function draw() {
   if (state === 'menu') {
     ctx.fillStyle = 'rgba(0,0,0,0.7)';
     ctx.fillRect(0, 0, W, H);
-    centerText('RICOCHET', 30, COL.wall);
-    centerText('AUTO-GUN', 42, COL.bullet);
-    hr(54);
-    centerText(TOUCH ? 'DRAG - MOVE' : 'WASD - MOVE', 64, COL.target);
-    centerText(TOUCH ? 'TAP - START' : 'PRESS SPACE / TAP', 74, COL.wall);
-    hr(86);
-    bestBar(96, 'BEST ' + hiScore);
+    centerText('RICOCHET', 22, COL.wall);
+    centerText('AUTO-GUN', 34, COL.bullet);
+    hr(46);
+    centerText(TOUCH ? 'DRAG - MOVE' : 'WASD - MOVE', 56, COL.target);
+    centerText(TOUCH ? '2ND FINGER - BURST' : 'SPACE - BURST', 66, COL.target);
+    centerText('ANY KEY / TAP - START', 78, COL.wall);
+    hr(90);
+    bestBar(100, 'BEST ' + hiScore);
   } else if (state === 'gameover') {
     ctx.fillStyle = 'rgba(0,0,0,0.7)';
     ctx.fillRect(0, 0, W, H);
@@ -1522,7 +1556,7 @@ function draw() {
     if (newBest) seg.push({ el: 8, gap: 3, f: y => { if (Math.floor(time * 6) % 2 === 0) centerText('NEW BEST', y, COL.player); } });
     seg.push(
       { el: 1, gap: 4, f: y => hr(y) },
-      { el: 8, gap: 0, f: y => centerText('PRESS R / TAP', y, COL.bullet) },
+      { el: 8, gap: 0, f: y => centerText('ANY KEY / TAP - RESTART', y, COL.bullet) },
     );
     let total = 0;
     for (const s of seg) total += s.el + s.gap;

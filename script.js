@@ -398,6 +398,10 @@ const ebullets = [];
 const targets = [];
 const sparks = [];
 const popups = [];
+const vfx = { shake:0, shakeDur:0.25, shakeMag:0, flashT:0, flashDur:0.3, flashCol:'#fff', flashTh:2, auraT:0, auraDur:0.6, auraCol:'#fff' };
+const vfxShake  = m   => { vfx.shakeMag = Math.max(vfx.shakeMag, m); vfx.shake = vfx.shakeDur; };
+const vfxFlash  = (c,d,t) => { vfx.flashCol=c; vfx.flashDur=d; vfx.flashT=d; vfx.flashTh=t||2; };
+const vfxAura   = (c,d) => { vfx.auraCol=c; vfx.auraDur=d; vfx.auraT=d; };
 
 // ---- buff / debuff systems ----
 const MAX_LIVES = 5;
@@ -579,6 +583,7 @@ function spawnSparks(x, y, color) {
 }
 
 function loseLife() {
+  vfxShake(3); vfxFlash(COL.player, 0.4, 4); vfxAura(COL.player, 0.7);
   if (shield > 0) {
     shield--;
     invuln = 0.6;
@@ -766,11 +771,23 @@ function updateEbullets(dt) {
 // ---- buff / debuff helpers ----
 function playerScal() { return growT > 0 ? 1.6 : 1; }
 function playerRad() { return 7 * playerScal(); }
-function addPop(x, y, text, color) {
-  popups.push({ x, y, text, life: 0.9, color: color || COL.targetHi });
+function addPop(x, y, text, color, kind) {
+  const STEP = 9, COL_W = 44;
+  let py = y;
+  for (let tries = 0; tries < 12; tries++) {
+    let busy = false;
+    for (const p of popups) {
+      if (p.life <= 0) continue;
+      if (Math.abs(p.x - x) < COL_W && Math.abs(p.y - py) < STEP) { busy = true; break; }
+    }
+    if (!busy) break;
+    py -= STEP;
+  }
+  popups.push({ x, y: py, text, life: 0.9, color: color || COL.targetHi, kind: kind || 'score' });
 }
 function debuffPop(text) {
-  addPop(player.x, player.y - 10, text, COL.joker);
+  addPop(player.x, player.y - 10, text, COL.joker, 'debuff');
+  vfxShake(2); vfxFlash(COL.joker, 0.35, 3); vfxAura(COL.joker, 0.7);
   sfxDebuff();
 }
 function ringSparks(x, y, color) {
@@ -821,15 +838,18 @@ function rollBuffType() {
 function applyBuff(type) {
   if (type === PUP.HEAL) {
     lives = Math.min(MAX_LIVES, lives + 1);
-    addPop(player.x, player.y - 8, '+HP', COL.green);
+    addPop(player.x, player.y - 8, '+HP', COL.green, 'buff');
+    vfxFlash(COL.green, 0.3, 2); vfxAura(COL.green, 0.7);
     sfxPower();
   } else if (type === PUP.SHIELD) {
     shield = Math.min(MAX_SHIELD, shield + 1);
-    addPop(player.x, player.y - 8, '+SHIELD', COL.blue);
+    addPop(player.x, player.y - 8, '+SHIELD', COL.blue, 'buff');
+    vfxFlash(COL.blue, 0.3, 2); vfxAura(COL.blue, 0.7);
     sfxPower();
   } else {
     spawnBurst();
-    addPop(player.x, player.y - 8, 'BURST!', COL.target);
+    addPop(player.x, player.y - 8, 'BURST!', COL.target, 'buff');
+    vfxFlash(COL.target, 0.3, 2); vfxAura(COL.target, 0.7);
   }
   grantSpikeBreak();
 }
@@ -838,7 +858,7 @@ function addKill(t) {
   streak++;
   if (streak % STREAK_FOR_BUFF === 0) {
     applyBuff(rollBuffType());
-    addPop(player.x, player.y - 10, 'STREAK ' + streak, COL.wall);
+    addPop(player.x, player.y - 10, 'STREAK ' + streak, COL.wall, 'buff');
   }
 }
 
@@ -881,13 +901,13 @@ function updatePowerups(dt) {
 function collectPickup(p) {
   if (p.type === PUP.HEAL) {
     lives = Math.min(MAX_LIVES, lives + 1);
-    addPop(p.x, p.y, '+HP', COL.green);
+    addPop(p.x, p.y, '+HP', COL.green, 'buff');
   } else if (p.type === PUP.SHIELD) {
     shield = Math.min(MAX_SHIELD, shield + 1);
-    addPop(p.x, p.y, '+SHIELD', COL.blue);
+    addPop(p.x, p.y, '+SHIELD', COL.blue, 'buff');
   } else {
     spawnBurst();
-    addPop(p.x, p.y, 'BURST!', COL.target);
+    addPop(p.x, p.y, 'BURST!', COL.target, 'buff');
   }
   grantSpikeBreak();
   ringSparks(p.x, p.y, COL.green);
@@ -1375,9 +1395,36 @@ function drawStars() {
   ctx.globalAlpha = 1;
 }
 
+function drawEffectChips() {
+  const chips = [];
+  if (shield > 0)      chips.push(['SH'  + shield,     COL.blue]);
+  if (burstLevel > 0)  chips.push(['BR'  + burstLevel, COL.target]);
+  if (spikeBreakT > 0) chips.push(['SPK', COL.green]);
+  if (growT  > 0) chips.push(['BIG', COL.joker]);
+  if (fastT  > 0) chips.push(['FST', COL.joker]);
+  if (slowT  > 0) chips.push(['SLW', COL.joker]);
+  if (gravT  > 0) chips.push(['GRV', COL.joker]);
+  if (invertT > 0) chips.push(['INV', COL.joker]);
+  if (glitchT > 0) chips.push(['GLT', COL.joker]);
+  if (!chips.length) return;
+  ctx.font = '8px monospace'; ctx.textBaseline = 'top'; ctx.textAlign = 'left';
+  let x = 4; const y = 24;
+  for (let i = 0; i < chips.length && i < 4; i++) {
+    const t = chips[i][0], col = chips[i][1];
+    const w = Math.ceil(ctx.measureText(t).width) + 3;
+    if (x + w > W - 4) break;
+    ctx.fillStyle = '#000'; ctx.fillRect(x - 1, y - 1, w + 2, 10);
+    ctx.fillStyle = col;    ctx.fillRect(x,     y,     w,     8);
+    ctx.fillStyle = '#000'; ctx.fillText(t, x + 2, y);
+    x += w + 3;
+  }
+}
+
 function draw() {
+  ctx.save();
+  if (vfx.shake > 0) ctx.translate((Math.random() * 2 - 1) * vfx.shakeMag, (Math.random() * 2 - 1) * vfx.shakeMag);
   ctx.fillStyle = COL.bg;
-  ctx.fillRect(0, 0, W, H);
+  ctx.fillRect(-2, -2, W + 4, H + 4);
   drawStars();
 
   for (let i = 0; i < N; i++) {
@@ -1396,6 +1443,13 @@ function draw() {
 
   drawSpikes();
 
+  if (vfx.auraT > 0) {
+    const k = 1 - vfx.auraT / vfx.auraDur;
+    const r = 6 + k * 12;
+    ctx.globalAlpha = (1 - k) * 0.9; drawRing(player.x, player.y, r, vfx.auraCol);
+    ctx.globalAlpha = (1 - k) * 0.4; drawRing(player.x, player.y, r + 2, vfx.auraCol);
+    ctx.globalAlpha = 1;
+  }
   if (invuln <= 0 || Math.floor(time * 12) % 2 === 0) drawShip();
 
   ctx.fillStyle = COL.bullet;
@@ -1413,14 +1467,23 @@ function draw() {
   }
 
   for (const p of popups) {
-    ctx.globalAlpha = Math.max(0, Math.min(1, p.life / 0.3));
-    ctx.fillStyle = COL.targetHi;
-    ctx.font = '8px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText(p.text, p.x, p.y);
-    ctx.textAlign = 'left';
+    const a = Math.max(0, Math.min(1, p.life / 0.3));
+    ctx.globalAlpha = a;
+    ctx.font = '8px monospace'; ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+    const badge = p.kind === 'buff' || p.kind === 'debuff';
+    if (badge) {
+      const tw = Math.ceil(ctx.measureText(p.text).width);
+      const bx = Math.round(p.x - tw/2 - 2), by = Math.round(p.y - 1);
+      ctx.fillStyle = '#000'; ctx.fillRect(bx - 1, by - 1, tw + 4, 10);
+      ctx.fillStyle = p.color; ctx.fillRect(bx, by, tw + 2, 8);
+      ctx.fillStyle = '#000'; ctx.fillText(p.text, p.x, p.y);
+    } else {
+      ctx.fillStyle = '#000'; ctx.fillText(p.text, p.x + 1, p.y + 1);
+      ctx.fillStyle = p.color; ctx.fillText(p.text, p.x, p.y);
+    }
     ctx.globalAlpha = 1;
   }
+  ctx.textAlign = 'left';
 
   ctx.fillStyle = COL.wall;
   ctx.font = '8px monospace';
@@ -1434,6 +1497,7 @@ function draw() {
   ctx.fillText('>'.repeat(1 + Math.floor(ph * 3)), W - 2, 4);
   ctx.fillStyle = COL.wall;
   ctx.fillText('HI ' + hiScore, W - 2, 14);
+  drawEffectChips();
   ctx.textAlign = 'left';
 
   if (state === 'menu') {
@@ -1479,6 +1543,16 @@ function draw() {
     ctx.fill();
     ctx.globalAlpha = 1;
   }
+
+  ctx.restore();
+  if (vfx.flashT > 0) {
+    const k = Math.max(0, Math.min(1, vfx.flashT / vfx.flashDur));
+    ctx.globalAlpha = k; ctx.fillStyle = vfx.flashCol;
+    const th = vfx.flashTh;
+    ctx.fillRect(0, 0, W, th); ctx.fillRect(0, H - th, W, th);
+    ctx.fillRect(0, 0, th, H); ctx.fillRect(W - th, 0, th, H);
+    ctx.globalAlpha = 1;
+  }
 }
 
 // ---- main loop (fixed 120Hz physics, render each frame) ----
@@ -1514,6 +1588,9 @@ function frame(now) {
       updateEbullets(sdt);
       updateTargets(sdt);
     }
+    if (vfx.shake  > 0) vfx.shake  -= sdt;
+    if (vfx.flashT > 0) vfx.flashT -= sdt;
+    if (vfx.auraT  > 0) vfx.auraT  -= sdt;
     updateSparks(sdt);
     updatePopups(sdt);
     updateWall();
